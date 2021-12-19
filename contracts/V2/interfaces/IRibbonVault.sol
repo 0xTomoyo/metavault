@@ -53,10 +53,30 @@ interface IRibbonVault {
             uint104 cap
         );
 
+    function vaultState()
+        external
+        view
+        returns (
+            uint16 round,
+            uint104 lockedAmount,
+            uint104 lastLockedAmount,
+            uint128 totalPending,
+            uint128 queuedWithdrawShares
+        );
+
     function withdrawals(address account)
         external
         view
         returns (uint16 round, uint128 shares);
+
+    function depositReceipts(address account)
+        external
+        view
+        returns (
+            uint16 round,
+            uint104 amount,
+            uint128 unredeemedShares
+        );
 
     /**
      * @notice Returns the underlying balance held on the vault for the account
@@ -98,6 +118,8 @@ interface IRibbonVault {
     function cap() external view returns (uint256);
 
     function totalPending() external view returns (uint256);
+
+    function totalSupply() external view returns (uint256);
 
     /**
      * @notice Returns the vault's total balance, including the amounts locked into a short position

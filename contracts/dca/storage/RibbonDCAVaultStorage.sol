@@ -2,11 +2,15 @@
 pragma solidity =0.8.4;
 
 import {IRibbonVault} from "../../V2/interfaces/IRibbonVault.sol";
-import {IOptionsVault} from "../../V2/interfaces/IOptionsVault.sol";
+
+struct VaultWithdrawals {
+    uint128 yieldVault;
+    uint128 dcaVault;
+}
 
 abstract contract RibbonDCAVaultStorageV1 {
     // Ribbon V1 vault to earn yield in
-    IOptionsVault public yieldVault;
+    IRibbonVault public yieldVault;
     // Ribbon V2 vault to DCA accrued yield into
     IRibbonVault public dcaVault;
     // The underlying asset of the dcaVault
@@ -15,10 +19,12 @@ abstract contract RibbonDCAVaultStorageV1 {
     bytes public swapPath;
     // Dividend per share
     uint256 public magnifiedDividendPerShare;
+    // Pending withdrawals from the yield and dca vaults
+    VaultWithdrawals public pendingWithdrawals;
     // Updated whenever the token balance of a user changes
     mapping(address => int256) public magnifiedDividendCorrections;
-    // Keeps track of users withdrawals from the dca vault
-    mapping(address => uint256) public dcaVaultWithdrawals;
+    // Keeps track of users withdrawals from the yield and dca vaults
+    mapping(address => VaultWithdrawals) public vaultWithdrawals;
 }
 
 // We are following Compound's method of upgrading new contract implementations
