@@ -13,10 +13,9 @@ import {Vault} from "../V2/libraries/Vault.sol";
 import {ShareMath} from "../V2/libraries/ShareMath.sol";
 
 import {IRibbonVault} from "../V2/interfaces/IRibbonVault.sol";
-import {IOptionsVault} from "../V2/interfaces/IOptionsVault.sol";
 import {IWETH} from "../V2/interfaces/IWETH.sol";
 import {RibbonVaultBase} from "../V2/base/RibbonVaultBase.sol";
-import {RibbonDCAVaultStorage} from "./storage/RibbonDCAVaultStorage.sol";
+import {RibbonDCAVaultStorage, VaultWithdrawals} from "./storage/RibbonDCAVaultStorage.sol";
 
 contract RibbonDCAVault is RibbonVaultBase, RibbonDCAVaultStorage {
     using SafeMath for uint256;
@@ -100,12 +99,11 @@ contract RibbonDCAVault is RibbonVaultBase, RibbonDCAVaultStorage {
 
         require(_putSellingVault != address(0), "!_putSellingVault");
         require(_callSellingVault != address(0), "!_callSellingVault");
-        require(
-            IOptionsVault(_putSellingVault).asset() == _vaultParams.asset,
-            "!_vaultParams.asset"
-        );
+        (, , address _yieldVaultAsset, , , ) = IRibbonVault(_putSellingVault)
+            .vaultParams();
+        require(_yieldVaultAsset == _vaultParams.asset, "!_vaultParams.asset");
 
-        yieldVault = IOptionsVault(_putSellingVault);
+        yieldVault = IRibbonVault(_putSellingVault);
         dcaVault = IRibbonVault(_callSellingVault);
         (, , dcaVaultAsset, , , ) = IRibbonVault(_callSellingVault)
             .vaultParams();
@@ -140,59 +138,43 @@ contract RibbonDCAVault is RibbonVaultBase, RibbonDCAVaultStorage {
      * @param numShares is the number of shares to withdraw
      */
     function initiateWithdraw(uint256 numShares) public override {
-        require(numShares > 0, "!numShares");
+        uint256 userShares = shares(msg.sender);
+        uint256 userDividends = dividendOf(msg.sender);
 
-        // We do a max redeem before initiating a withdrawal
-        // But we check if they must first have unredeemed shares
-        if (
-            depositReceipts[msg.sender].amount > 0 ||
-            depositReceipts[msg.sender].unredeemedShares > 0
-        ) {
-            _redeem(0, true);
+        super.initiateWithdraw(numShares);
+
+        (bool yieldWithdrawn, uint256 yieldAmount) = VaultLifecycle
+            .initiateWithdrawal(
+                yieldVault,
+                userShares.mul(yieldVault.shares(address(this))).div(
+                    totalSupply()
+                )
+            );
+        (bool dcaWithdrawn, uint256 dcaAmount) = VaultLifecycle
+            .initiateWithdrawal(
+                dcaVault,
+                userDividends.mul(numShares).div(userShares)
+            );
+        VaultWithdrawals memory vaultWithdrawal = vaultWithdrawals[msg.sender];
+        vaultWithdrawals[msg.sender].yieldVault = vaultWithdrawal
+            .yieldVault
+            .add(yieldAmount);
+        if (dcaAmount != 0) {
+            vaultWithdrawals[msg.sender].dcaVault = vaultWithdrawal
+                .dcaVault
+                .add(dcaAmount);
         }
-
-        // Calculate shares to withdraw from the dca vault
-        uint256 shareBalance = balanceOf(msg.sender);
-        uint256 dcaWithdrawShares = shareBalance > 0
-            ? dividendOf(msg.sender).mul(numShares).div(shareBalance)
-            : 0;
-        if (dcaWithdrawShares > 0) {
-            // Initiate withdrawal from the dcaVault
-            dcaVault.initiateWithdraw(uint128(dcaWithdrawShares));
-            dcaVaultWithdrawals[msg.sender] = dcaVaultWithdrawals[msg.sender]
-                .add(dcaWithdrawShares);
-            // TODO: Check if assets can be instantly withdrawn
+        VaultWithdrawals memory totalPendingWithdrawals = pendingWithdrawals;
+        if (yieldWithdrawn) {
+            pendingWithdrawals.yieldVault = totalPendingWithdrawals
+                .yieldVault
+                .add(yieldAmount);
         }
-
-        // This caches the `round` variable used in shareBalances
-        uint256 currentRound = vaultState.round;
-        Vault.Withdrawal storage withdrawal = withdrawals[msg.sender];
-
-        bool withdrawalIsSameRound = withdrawal.round == currentRound;
-
-        emit InitiateWithdraw(msg.sender, numShares, currentRound);
-
-        uint256 existingShares = uint256(withdrawal.shares);
-
-        uint256 withdrawalShares;
-        if (withdrawalIsSameRound) {
-            withdrawalShares = existingShares.add(numShares);
-        } else {
-            require(existingShares == 0, "Existing withdraw");
-            withdrawalShares = numShares;
-            withdrawals[msg.sender].round = uint16(currentRound);
+        if (dcaWithdrawn) {
+            pendingWithdrawals.dcaVault = totalPendingWithdrawals.dcaVault.add(
+                dcaAmount
+            );
         }
-
-        ShareMath.assertUint128(withdrawalShares);
-        withdrawals[msg.sender].shares = uint128(withdrawalShares);
-
-        uint256 newQueuedWithdrawShares = uint256(
-            vaultState.queuedWithdrawShares
-        ).add(numShares);
-        ShareMath.assertUint128(newQueuedWithdrawShares);
-        vaultState.queuedWithdrawShares = uint128(newQueuedWithdrawShares);
-
-        _transfer(msg.sender, address(this), numShares);
     }
 
     /**
